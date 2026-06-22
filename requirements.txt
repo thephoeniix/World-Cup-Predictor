@@ -1,0 +1,14 @@
+pandas
+numpy
+statsmodels
+scikit-learn    
+matplotlib
+plotly
+streamlit
+kagglehub
+wbdata
+mlflow
+pymc
+optuna
+shap
+jupyter
