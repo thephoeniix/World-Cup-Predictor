@@ -1,6 +1,8 @@
+import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
+from scipy.stats import poisson
 
 
 def to_long(df):
@@ -82,3 +84,34 @@ def predict_lambdas(model, df):
     lambda_away = model.predict(away_view)
 
     return lambda_home, lambda_away
+
+
+def match_outcome_probs(lambda_home, lambda_away, max_goals=10):
+    """
+    Turn each match's (lambda_home, lambda_away) into P(home win), P(draw),
+    P(away win), by treating home/away goals as independent Poisson draws
+    and summing the joint grid over the three regions h>a, h==a, h<a.
+
+    `max_goals` just bounds the grid we sum over (10 already covers
+    ~99.99% of the Poisson mass for any realistic lambda in football).
+    """
+    lambda_home = np.asarray(lambda_home, dtype=float)
+    lambda_away = np.asarray(lambda_away, dtype=float)
+    goals = np.arange(max_goals + 1)
+
+    # (n_matches, max_goals+1) pmf tables for each side.
+    pmf_home = poisson.pmf(goals[None, :], lambda_home[:, None])
+    pmf_away = poisson.pmf(goals[None, :], lambda_away[:, None])
+
+    # Joint pmf grid per match: (n_matches, n_home_goals, n_away_goals).
+    joint = pmf_home[:, :, None] * pmf_away[:, None, :]
+
+    home_win = np.triu(np.ones((goals.size, goals.size)), k=1).T
+    draw = np.eye(goals.size)
+    away_win = np.triu(np.ones((goals.size, goals.size)), k=1)
+
+    p_home = (joint * home_win).sum(axis=(1, 2))
+    p_draw = (joint * draw).sum(axis=(1, 2))
+    p_away = (joint * away_win).sum(axis=(1, 2))
+
+    return pd.DataFrame({"p_home": p_home, "p_draw": p_draw, "p_away": p_away})

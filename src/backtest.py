@@ -10,6 +10,16 @@ BACKTEST_YEARS = [2010, 2014, 2018, 2022, 2026]
 # Columns that get z-scored before going into the Poisson model.
 STANDARDIZE_COLS = ["elo_diff", "host_diff"]
 
+# Named model variants, all sharing the same Poisson engine (only the
+# formula changes) -- this is the V1 floor the blueprint asks for:
+# "tasa base" (no team-strength signal at all) and "Elo puro" (Elo only,
+# no host advantage) are what the real model has to beat.
+FORMULAS = {
+    "base_rate": "goals ~ is_home",
+    "elo_only": "goals ~ is_home + elo_diff",
+    "elo_host": "goals ~ is_home + elo_diff + host_diff",
+}
+
 
 def get_train_test(df, wc_year):
     """
@@ -48,7 +58,7 @@ def standardize(train, test, cols=STANDARDIZE_COLS):
     test = test.copy()
 
     mean = train[cols].mean()
-    std = train[cols].std()
+    std = train[cols].std().replace(0, 1)  # constant column (e.g. no host data yet for 2010) -> leave as-is, don't divide by zero
 
     train[cols] = (train[cols] - mean) / std
     test[cols] = (test[cols] - mean) / std
@@ -56,10 +66,15 @@ def standardize(train, test, cols=STANDARDIZE_COLS):
     return train, test
 
 
-def run_backtest(df, wc_year):
+def run_backtest(df, wc_year, formula=FORMULAS["elo_host"]):
     """
     Train the shared Poisson engine on everything before `wc_year`, then
     predict that World Cup's matches.
+
+    `formula` picks the model variant (see FORMULAS) -- everything else
+    (the train/test split, the standardization) is identical, so any
+    difference in the resulting predictions is attributable to the
+    feature list, not to the evaluation setup.
 
     Returns the test rows with two extra columns, lambda_home/lambda_away
     (the model's predicted expected goals for each side) — metrics.py will
@@ -69,7 +84,7 @@ def run_backtest(df, wc_year):
     train, test = standardize(train, test)
 
     long_train = pm.to_long(train)
-    model = pm.fit_poisson(long_train)
+    model = pm.fit_poisson(long_train, formula=formula)
 
     lambda_home, lambda_away = pm.predict_lambdas(model, test)
 
@@ -80,14 +95,26 @@ def run_backtest(df, wc_year):
     return test, model
 
 
-def run_all_backtests(df, years=BACKTEST_YEARS):
+def run_all_backtests(df, years=BACKTEST_YEARS, formula=FORMULAS["elo_host"]):
     """Run run_backtest for every year in `years`, stacked into one table."""
     all_results = []
 
     for year in years:
-        test, _ = run_backtest(df, year)
+        test, _ = run_backtest(df, year, formula=formula)
         test["wc_year"] = year
         all_results.append(test)
+
+    return pd.concat(all_results, ignore_index=True)
+
+
+def compare_models(df, formulas=FORMULAS, years=BACKTEST_YEARS):
+    """Run every named model variant over the same years, tagged with a `model` column."""
+    all_results = []
+
+    for name, formula in formulas.items():
+        results = run_all_backtests(df, years=years, formula=formula)
+        results["model"] = name
+        all_results.append(results)
 
     return pd.concat(all_results, ignore_index=True)
 
